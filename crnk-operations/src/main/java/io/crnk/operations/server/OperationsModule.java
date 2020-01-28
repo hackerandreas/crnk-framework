@@ -151,7 +151,7 @@ public class OperationsModule implements Module {
     private void enrichTypeIdInformation(List<Operation> operations, QueryContext queryContext) {
         ResourceRegistry resourceRegistry = moduleContext.getResourceRegistry();
         for (Operation operation : operations) {
-            if (operation.getOp().equalsIgnoreCase(HttpMethod.DELETE.toString())) {
+            if (Arrays.asList(HttpMethod.DELETE.toString(), HttpMethod.GET.toString()).contains(operation.getOp())) {
                 String path = OperationParameterUtils.parsePath(operation.getPath());
                 PathBuilder pathBuilder = new PathBuilder(resourceRegistry, moduleContext.getTypeParser());
                 JsonPath jsonPath = pathBuilder.build(path, queryContext);
@@ -203,12 +203,13 @@ public class OperationsModule implements Module {
 
             Operation operation = orderedOperation.getOperation();
             String method = operation.getOp();
-            JsonPath path = pathBuilder.build(operation.getPath(), queryContext);
-            orderedOperation.setPath(path);
-            if (path == null) {
+            String path = OperationParameterUtils.parsePath(operation.getPath());
+            JsonPath jsonPath = pathBuilder.build(path, queryContext);
+            orderedOperation.setPath(jsonPath);
+            if (jsonPath == null) {
                 throw new BadRequestException("invalid path: " + operation.getPath());
             }
-            String type = path.getRootEntry().getResourceInformation().getResourceType();
+            String type = jsonPath.getRootEntry().getResourceInformation().getResourceType();
 
             if (!method.equals(bulkMethod) || !type.equals(bulkType)) {
                 if (!bulk.isEmpty()) {
@@ -261,22 +262,25 @@ public class OperationsModule implements Module {
 
             JsonPath repositoryPath = new ResourcePath(rootEntry, null);
 
-            PreconditionUtil.verifyEquals(HttpMethod.POST.toString(), method, "experimental bulk support is currently limited to POST");
+            PreconditionUtil.assertTrue(
+                method.equals(HttpMethod.POST.toString()) || method.equals(HttpMethod.DELETE.toString()) ,
+                "experimental bulk support is currently limited to POST and DELETE"
+            );
 
             Document requestBody = new Document();
             requestBody.setData(Nullable.of(operations.stream().map(it -> it.getOperation().getValue()).collect(Collectors.toList())));
-
 
             Map<String, Set<String>> parameters = new HashMap<>();
             Response response = requestDispatcher.dispatchRequest(repositoryPath.toString(), method, parameters, requestBody);
 
             boolean success = response.getHttpStatus() < 400;
+            boolean hasContent = response.getHttpStatus() != 204;
             for (int i = 0; i < operations.size(); i++) {
                 OrderedOperation orderedOperation = operations.get(i);
                 OperationResponse operationResponse = new OperationResponse();
                 operationResponse.setStatus(response.getHttpStatus());
                 if (displayOperationResponseOnSuccess || !success) {
-                    if (success) {
+                    if (success && hasContent) {
                         List<Resource> collectionData = response.getDocument().getCollectionData().get();
                         Resource responseResourceBody = collectionData.get(0);
                         operationResponse.setData(Nullable.of(responseResourceBody));
